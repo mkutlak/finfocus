@@ -2,32 +2,28 @@
 title: Docker Deployment
 ---
 
-> **Note:** No Dockerfile currently exists in the repository. This guide describes
-> the planned Docker configuration. Container support is on the roadmap.
-
-This guide describes the Docker configuration for building and running
-FinFocus in a containerized environment.
+This guide describes the Docker image for running FinFocus in a container.
+Each release publishes it to the GitHub Container Registry for `linux/amd64`
+and `linux/arm64`, built from `docker/Dockerfile`.
 
 ## Quick Start
 
 ### Pull from GitHub Container Registry
+
+Tags are release versions without the leading `v`.
 
 ```bash
 # Pull the latest release
 docker pull ghcr.io/rshade/finfocus:latest
 
 # Pull a specific version
-docker pull ghcr.io/rshade/finfocus:v0.3.0
+docker pull ghcr.io/rshade/finfocus:0.5.4
 ```
 
 ### Build Locally
 
-> **Note:** Local builds require a Dockerfile, which is not yet in the repository.
-> The following commands are provided for reference and will work once Docker support
-> is added. See [the roadmap](../architecture/roadmap.md) for status.
-
 ```bash
-# Build the image (planned - requires Dockerfile)
+# Build the image from the repository root
 docker build -f docker/Dockerfile -t finfocus:local .
 
 # Run the help command
@@ -118,12 +114,13 @@ docker run --rm \
 
 ## Development
 
-### Build Arguments
+### Build Metadata
 
-The Dockerfile supports the following build-time variables:
-
-- Git version information is automatically embedded during build
-- Build date and commit information included in the binary
+The Dockerfile declares no build arguments. It embeds the build date in the
+binary and takes the version and commit from `git describe` and
+`git rev-parse`. `.dockerignore` excludes `.git/`, so the binary in the
+image reports its version as `docker`; the image tag and the
+`org.opencontainers.image.version` label carry the release version.
 
 ### Health Check
 
@@ -155,5 +152,19 @@ sudo chown -R 1001:1001 ~/.finfocus
 
 ### Plugin Installation
 
-Currently, plugins must be manually installed in the `~/.finfocus/plugins`
-directory. Future versions will include automated plugin downloading capabilities.
+Install plugins with `finfocus plugin install`. It downloads the plugin's
+GitHub release into `/home/finfocus/.finfocus/plugins`. Keep the plugin for
+later runs with a named volume:
+
+```bash
+docker run --rm \
+  -v finfocus-plugins:/home/finfocus/.finfocus/plugins \
+  ghcr.io/rshade/finfocus:latest \
+  plugin install aws-public
+```
+
+Do not mount the host's own `~/.finfocus/plugins` for an install. On Linux
+the container user (UID 1001) cannot write to it, and on macOS the container
+writes Linux binaries that the host's `finfocus` then fails to run. Without a
+volume, the plugin lasts only for that container, which suits a CI job that
+installs it on every run.

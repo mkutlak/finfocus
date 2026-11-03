@@ -4339,7 +4339,8 @@ func ProjectedResourceCacheKey(resource ResourceDescriptor) (string, error) {
 
 // generateProjectedCostResourceKey builds a deterministic cache key for a projected cost lookup.
 // The key has the format "projected/{provider}/{type}/{region}/{sku}/tags-{digest}".
-// Region is extracted from "availabilityZone" or "region"; SKU from "instanceType", "type", or "sku".
+// Region is extracted from "availabilityZone" or "region", else the provider's environment
+// region (proto.RegionFromEnv); SKU from "instanceType", "type", or "sku".
 // The digest covers the flattened tag map, so nested fields such as sku.capacity do not collide.
 // When the resource has ref.* properties, "/refs-{digest}" is appended after the tag digest.
 // When the resource sends attributes, "/attrs-{digest}" follows, since the tag digest cannot
@@ -4351,6 +4352,11 @@ func generateProjectedCostResourceKey(resource ResourceDescriptor) (string, erro
 	}
 
 	region := extractStringProperty(resource.Properties, "availabilityZone", "region")
+	if region == "" {
+		// The plugin may receive AWS_REGION or SCW_DEFAULT_ZONE as the region,
+		// and the tag digest cannot see an environment variable.
+		region = proto.RegionFromEnv(resource.Provider)
+	}
 	sku := extractStringProperty(resource.Properties, "instanceType", "type", "sku")
 
 	key := cache.BuildProjectedKey(resource.Provider, resource.Type, region, sku)

@@ -9,14 +9,16 @@ import "github.com/rshade/finfocus/internal/resourcetype"
 // ResolveSKU maps a provider and resource type to a well-known SKU identifier as a fallback
 // when property-based SKU extraction yields no result.
 //
-// For supported providers (currently only "aws"), it returns a canonical SKU for known
-// resource types; for unknown resource types or unsupported providers it returns the empty
-// string, which callers should treat as a no-op. The properties map may be consulted to
-// refine the mapping for certain resource types.
+// For supported providers (currently "aws" and "scaleway"), it returns a canonical SKU for
+// known resource types; for unknown resource types or unsupported providers it returns the
+// empty string, which callers should treat as a no-op. The properties map may be consulted
+// to refine the mapping for certain resource types.
 func ResolveSKU(provider, resourceType string, properties map[string]string) string {
 	switch resourcetype.NormalizeProvider(provider) {
 	case "aws":
 		return resolveAWSSKU(resourceType, properties)
+	case "scaleway":
+		return resolveScalewaySKU(resourceType)
 	default:
 		return ""
 	}

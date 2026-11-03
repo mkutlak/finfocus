@@ -1970,6 +1970,80 @@ func TestResolveSKUAndRegion_AWSRegionFallbackScope(t *testing.T) {
 	}
 }
 
+// TestResolveSKUAndRegion_ScalewayRegionFallbackScope verifies that
+// SCW_DEFAULT_ZONE, then SCW_DEFAULT_REGION, fill the region of a Scaleway
+// resource that has no location property, and that no other provider reads
+// them. Not parallel: it sets process environment variables.
+func TestResolveSKUAndRegion_ScalewayRegionFallbackScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		provider   string
+		properties map[string]string
+		zoneEnv    string
+		regionEnv  string
+		wantRegion string
+	}{
+		{
+			name:       "Scaleway resource uses SCW_DEFAULT_ZONE",
+			provider:   "scaleway",
+			properties: map[string]string{"type": "DEV1-S"},
+			zoneEnv:    "nl-ams-1",
+			regionEnv:  "nl-ams",
+			wantRegion: "nl-ams-1",
+		},
+		{
+			name:       "Scaleway resource uses SCW_DEFAULT_REGION without a zone variable",
+			provider:   "scaleway",
+			properties: map[string]string{"type": "DEV1-S"},
+			regionEnv:  "pl-waw",
+			wantRegion: "pl-waw",
+		},
+		{
+			name:       "explicit zone beats the variables",
+			provider:   "scaleway",
+			properties: map[string]string{"type": "DEV1-S", "zone": "fr-par-1"},
+			zoneEnv:    "pl-waw-1",
+			wantRegion: "fr-par-1",
+		},
+		{
+			name:       "Scaleway resource with no location and no variables stays empty",
+			provider:   "scaleway",
+			properties: map[string]string{"type": "DEV1-S"},
+			wantRegion: "",
+		},
+		{
+			name:       "AWS resource ignores the Scaleway variables",
+			provider:   "aws",
+			properties: map[string]string{"instanceType": "t3.micro"},
+			zoneEnv:    "nl-ams-1",
+			regionEnv:  "nl-ams",
+			wantRegion: "",
+		},
+		{
+			name:       "Azure resource ignores the Scaleway variables",
+			provider:   "azure",
+			properties: map[string]string{"vmSize": "Standard_B1s"},
+			zoneEnv:    "nl-ams-1",
+			regionEnv:  "nl-ams",
+			wantRegion: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// An empty value reads as unset, which also isolates the AWS rows
+			// from the developer's own environment.
+			t.Setenv("SCW_DEFAULT_ZONE", tt.zoneEnv)
+			t.Setenv("SCW_DEFAULT_REGION", tt.regionEnv)
+			t.Setenv("AWS_REGION", "")
+			t.Setenv("AWS_DEFAULT_REGION", "")
+
+			_, region := resolveSKUAndRegion(context.Background(), tt.provider, "", tt.properties)
+			assert.Equal(t, tt.wantRegion, region)
+		})
+	}
+}
+
 // T011: TestGetActualCost_ValidationFailure_InvalidTimeRange verifies that
 // requests with end time before start time trigger pre-flight validation failure.
 func TestGetActualCost_ValidationFailure_InvalidTimeRange(t *testing.T) {
@@ -4625,6 +4699,103 @@ func TestResolveSKUAndRegion_PackageNamesUseTheCloudExtractors(t *testing.T) {
 			sku, region := resolveSKUAndRegion(context.Background(), tt.provider, "", tt.properties)
 			assert.Equal(t, tt.wantSKU, sku)
 			assert.Equal(t, tt.wantRegion, region)
+		})
+	}
+}
+
+// TestResolveSKUAndRegion_ScalewayProperties pins the Scaleway property keys:
+// the SKU comes from type, then nodeType, then the well-known table; the
+// region comes from zone, then region.
+func TestResolveSKUAndRegion_ScalewayProperties(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		resourceType string
+		properties   map[string]string
+		wantSKU      string
+		wantRegion   string
+	}{
+		{
+			name:         "server reads type and zone",
+			resourceType: "scaleway:instance/server:Server",
+			properties:   map[string]string{"type": "DEV1-S", "zone": "fr-par-1"},
+			wantSKU:      "DEV1-S",
+			wantRegion:   "fr-par-1",
+		},
+		{
+			name:         "pool reads nodeType and prefers zone over region",
+			resourceType: "scaleway:kubernetes/pool:Pool",
+			properties:   map[string]string{"nodeType": "PRO2-S", "size": "3", "zone": "fr-par-2", "region": "fr-par"},
+			wantSKU:      "PRO2-S",
+			wantRegion:   "fr-par-2",
+		},
+		{
+			name:         "database reads nodeType and region",
+			resourceType: "scaleway:databases/instance:Instance",
+			properties:   map[string]string{"nodeType": "DB-DEV-S", "region": "fr-par", "isHaCluster": "true"},
+			wantSKU:      "DB-DEV-S",
+			wantRegion:   "fr-par",
+		},
+		{
+			name:         "redis reads nodeType and zone",
+			resourceType: "scaleway:redis/cluster:Cluster",
+			properties:   map[string]string{"nodeType": "RED1-XS", "clusterSize": "1", "zone": "fr-par-1"},
+			wantSKU:      "RED1-XS",
+			wantRegion:   "fr-par-1",
+		},
+		{
+			name:         "block volume without a type gets the well-known SKU",
+			resourceType: "scaleway:block/volume:Volume",
+			properties:   map[string]string{"sizeInGb": "50", "iops": "5000", "zone": "nl-ams-1"},
+			wantSKU:      "volume",
+			wantRegion:   "nl-ams-1",
+		},
+		{
+			name:         "type wins over nodeType",
+			resourceType: "scaleway:instance/server:Server",
+			properties:   map[string]string{"type": "DEV1-M", "nodeType": "PRO2-S", "zone": "fr-par-1"},
+			wantSKU:      "DEV1-M",
+			wantRegion:   "fr-par-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sku, region := resolveSKUAndRegion(context.Background(), "scaleway", tt.resourceType, tt.properties)
+			assert.Equal(t, tt.wantSKU, sku)
+			assert.Equal(t, tt.wantRegion, region)
+		})
+	}
+}
+
+// TestPrepareProjectedDescriptor_ScalewayTypesPassValidation checks spec
+// SC-001: every priced Scaleway type passes strict pre-flight validation.
+func TestPrepareProjectedDescriptor_ScalewayTypesPassValidation(t *testing.T) {
+	t.Parallel()
+
+	resources := map[string]map[string]string{
+		"scaleway:instance/server:Server":                  {"type": "DEV1-S", "zone": "fr-par-1"},
+		"scaleway:kubernetes/pool:Pool":                    {"nodeType": "PRO2-S", "size": "3", "zone": "fr-par-1"},
+		"scaleway:kubernetes/cluster:Cluster":              {"type": "kapsule", "region": "fr-par"},
+		"scaleway:block/volume:Volume":                     {"sizeInGb": "50", "iops": "5000", "zone": "fr-par-1"},
+		"scaleway:loadbalancers/loadBalancer:LoadBalancer": {"type": "LB-S", "zone": "fr-par-1"},
+		"scaleway:databases/instance:Instance":             {"nodeType": "DB-DEV-S", "region": "fr-par"},
+		"scaleway:redis/cluster:Cluster": {
+			"nodeType": "RED1-XS", "clusterSize": "1", "zone": "fr-par-1",
+		},
+		"scaleway:network/publicGateway:PublicGateway": {"type": "VPC-GW-S", "zone": "fr-par-1"},
+		"scaleway:instance/ip:Ip":                      {"type": "routed_ipv4", "zone": "fr-par-1"},
+	}
+
+	for resourceType, properties := range resources {
+		t.Run(resourceType, func(t *testing.T) {
+			t.Parallel()
+			descriptor := PrepareProjectedDescriptor(
+				context.Background(), "urn:test", "scaleway", resourceType, properties, nil,
+			)
+			require.NoError(t, ValidateProjectedDescriptor(descriptor))
 		})
 	}
 }

@@ -61,6 +61,25 @@ func TestResolveSKU(t *testing.T) {
 			expected:     "cluster",
 		},
 		{
+			name:         "Scaleway block volume resolves to volume SKU",
+			provider:     "scaleway",
+			resourceType: "scaleway:block/volume:Volume",
+			properties:   map[string]string{"sizeInGb": "50", "iops": "5000"},
+			expected:     "volume",
+		},
+		{
+			name:         "Scaleway server has no well-known SKU",
+			provider:     "scaleway",
+			resourceType: "scaleway:instance/server:Server",
+			expected:     "",
+		},
+		{
+			name:         "legacy Scaleway index token is not mapped",
+			provider:     "scaleway",
+			resourceType: "scaleway:index/blockVolume:BlockVolume",
+			expected:     "",
+		},
+		{
 			name:         "properties are passed through but not used for well-known types",
 			provider:     "aws",
 			resourceType: "aws:eks/cluster:Cluster",

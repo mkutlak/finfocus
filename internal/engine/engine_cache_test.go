@@ -1077,3 +1077,45 @@ func TestCarbonFreshOnMonetaryCacheHit(t *testing.T) {
 		})
 	}
 }
+
+// TestProjectedCacheKeyIncludesEnvRegion pins that a region taken from the
+// environment reaches the cache key: a resource with no location property is
+// sent with AWS_REGION or SCW_DEFAULT_ZONE as its region, so two runs with
+// different values must not share an entry. Not parallel: it sets
+// environment variables.
+//
+//nolint:paralleltest // keyWith sets process environment variables.
+func TestProjectedCacheKeyIncludesEnvRegion(t *testing.T) {
+	keyWith := func(t *testing.T, env map[string]string, resource ResourceDescriptor) string {
+		t.Helper()
+		for _, name := range []string{"AWS_REGION", "AWS_DEFAULT_REGION", "SCW_DEFAULT_ZONE", "SCW_DEFAULT_REGION"} {
+			t.Setenv(name, env[name])
+		}
+		key, err := generateProjectedCostResourceKey(resource)
+		require.NoError(t, err)
+		return key
+	}
+	scaleway := ResourceDescriptor{
+		Type: "scaleway:instance/server:Server", Provider: "scaleway",
+		Properties: map[string]interface{}{"type": "DEV1-S"},
+	}
+	aws := ResourceDescriptor{
+		Type: "aws:ec2/instance:Instance", Provider: "aws",
+		Properties: map[string]interface{}{"instanceType": "t3.micro"},
+	}
+	azure := ResourceDescriptor{
+		Type: "azure-native:compute:VirtualMachine", Provider: "azure-native",
+		Properties: map[string]interface{}{"vmSize": "Standard_B1s"},
+	}
+
+	assert.NotEqual(t,
+		keyWith(t, map[string]string{"SCW_DEFAULT_ZONE": "fr-par-1"}, scaleway),
+		keyWith(t, map[string]string{"SCW_DEFAULT_ZONE": "nl-ams-1"}, scaleway))
+	assert.NotEqual(t,
+		keyWith(t, map[string]string{"AWS_REGION": "us-east-1"}, aws),
+		keyWith(t, map[string]string{"AWS_REGION": "eu-west-1"}, aws))
+	assert.Equal(t,
+		keyWith(t, map[string]string{"AWS_REGION": "us-east-1", "SCW_DEFAULT_ZONE": "fr-par-1"}, azure),
+		keyWith(t, map[string]string{"AWS_REGION": "eu-west-1", "SCW_DEFAULT_ZONE": "nl-ams-1"}, azure),
+		"another cloud's variables do not change the key")
+}

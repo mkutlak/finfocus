@@ -51,6 +51,8 @@ const (
 	maxErrorsToDisplay = 5
 	// awsProvider is the AWS provider name constant.
 	awsProvider = "aws"
+	// scalewayProvider is the Scaleway provider name constant.
+	scalewayProvider = "scaleway"
 
 	// Cloud identifier property keys injected by the ingest mappers, one pair
 	// per source format. Duplicated here because proto cannot import ingest
@@ -1276,12 +1278,44 @@ func ResolveSKUAndRegion(
 	return resolveSKUAndRegion(ctx, provider, resourceType, properties)
 }
 
+// RegionFromEnv returns the environment region that resolveSKUAndRegion falls
+// back to for provider, or "". The projected cache key adds it because, unlike
+// the properties, it is not covered by the tag digest.
+func RegionFromEnv(provider string) string {
+	return regionFromEnv(resourcetype.NormalizeProvider(provider))
+}
+
+// regionFromEnv returns the first non-empty region variable that the cloud's
+// own tooling reads. Only that cloud's variables apply, so an Azure or GCP
+// resource never inherits AWS_REGION. A Scaleway create that takes its zone
+// from provider config has no location input, and CI sets the same
+// variables the provider reads.
+func regionFromEnv(cloud string) string {
+	var keys []string
+	switch cloud {
+	case awsProvider:
+		keys = []string{"AWS_REGION", "AWS_DEFAULT_REGION"}
+	case scalewayProvider:
+		keys = []string{"SCW_DEFAULT_ZONE", "SCW_DEFAULT_REGION"}
+	}
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // resolveSKUAndRegion extracts the SKU and region for a resource from its
 // properties. Region resolution sources, in priority order (AWS):
 //
 //  1. Resource inputs: the region property, then availabilityZone.
 //  2. The region segment of an ARN property.
 //  3. AWS_REGION, then AWS_DEFAULT_REGION environment variables.
+//
+// Scaleway reads the SKU from type, then nodeType, then the skus well-known
+// table, and the region from zone, then region, then SCW_DEFAULT_ZONE, then
+// SCW_DEFAULT_REGION. Each provider's variables apply only to that provider.
 //
 // The Pulumi provider resource and stack configuration (aws:region) are not
 // consulted.
@@ -1315,23 +1349,21 @@ func resolveSKUAndRegion(
 	case "gcp":
 		sku = mapping.ExtractGCPSKU(properties)
 		region = mapping.ExtractGCPRegion(properties)
+	case scalewayProvider:
+		// Pools, databases, and Redis name their size nodeType; block volumes
+		// have no size property and take a fixed SKU.
+		sku = mapping.ExtractSKU(properties, "type", "nodeType")
+		if sku == "" {
+			sku = skus.ResolveSKU(provider, resourceType, properties)
+		}
+		region = mapping.ExtractRegion(properties, "zone", "region")
 	default:
 		sku = mapping.ExtractSKU(properties)
 		region = mapping.ExtractRegion(properties)
 	}
 
-	// Fallback to AWS environment variables for region if still empty
-	// IMPORTANT: Only apply AWS-specific env vars to AWS resources to avoid
-	// incorrect region assignment for Azure/GCP resources (SC-001 fix)
-	if region == "" && cloud == awsProvider {
-		if envReg := os.Getenv("AWS_REGION"); envReg != "" {
-			region = envReg
-		} else {
-			envReg = os.Getenv("AWS_DEFAULT_REGION")
-			if envReg != "" {
-				region = envReg
-			}
-		}
+	if region == "" {
+		region = regionFromEnv(cloud)
 	}
 
 	// Debug log when SKU or region is still empty after all extraction attempts (#723).

@@ -462,9 +462,13 @@ order core checks them:
    AWS_REGION=us-west-2 finfocus cost projected --pulumi-json plan.json
    ```
 
+For Scaleway resources the order is the `zone` input, then the `region`
+input, then the `SCW_DEFAULT_ZONE` or `SCW_DEFAULT_REGION` environment
+variable.
+
 Core does not read the Pulumi provider resource or stack configuration
-(`aws:region`), so set one of the sources above even when the stack has a
-region configured.
+(`aws:region`, `scaleway:zone`), so set one of the sources above even when
+the stack has a region configured.
 
 A regionless S3 bucket is expected to price at `$0.00` without an error: the
 plugin accepts it, and bucket contents cannot be measured from a plan.
